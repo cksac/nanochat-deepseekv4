@@ -9,12 +9,14 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 
-MODEL_ORDER = ["native", "param_matched", "deepseekv4", "deepseekv4_attnres"]
+MODEL_ORDER = ["native", "param_matched", "deepseekv4", "deepseekv4_mhc", "deepseekv4_attnres", "deepseekv4_attnmhc"]
 MODEL_LABELS = {
     "native": "native",
     "param_matched": "param-matched",
     "deepseekv4": "deepseekv4 (mHc)",
-    "deepseekv4_attnres": "deepseekv4 (AttnRes)",
+    "deepseekv4_mhc": "deepseekv4 (mHc 2H+1C)",
+    "deepseekv4_attnres": "deepseekv4 (AttnRes 2H+1C)",
+    "deepseekv4_attnmhc": "deepseekv4 (AttnMhc 2H+1C)",
     "deepseekv4_no_hash": "no hash",
     "deepseekv4_no_shared": "no shared",
 }
@@ -26,7 +28,9 @@ COLORS = {
     "native": "#6b7280",
     "param_matched": "#b5bac3",
     "deepseekv4": "#c84a35",
+    "deepseekv4_mhc": "#e67e22",
     "deepseekv4_attnres": "#2e7d32",
+    "deepseekv4_attnmhc": "#1565c0",
     "deepseekv4_no_hash": "#e09a8a",
     "deepseekv4_no_shared": "#8f2e21",
 }

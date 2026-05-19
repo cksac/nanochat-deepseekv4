@@ -27,6 +27,7 @@ from nanochat.gpt import GPT, GPTConfig
 from nanochat.deepseek_v4 import DeepSeekV4NanoChat, DeepSeekV4NanoConfig
 from nanochat.deepseek_v4_attnres import DeepSeekV4AttnResChat, DeepSeekV4AttnResConfig
 from nanochat.deepseek_v4_attnmhc import DeepSeekV4AttnMhcChat, DeepSeekV4AttnMhcConfig
+from nanochat.deepseek_v4_mhc import DeepSeekV4MhcChat, DeepSeekV4MhcConfig
 
 
 TINY_SHAKESPEARE_URL = "https://raw.githubusercontent.com/karpathy/char-rnn/master/data/tinyshakespeare/input.txt"
@@ -298,7 +299,7 @@ def deepseek_attnres_config(run_cfg):
         n_kv_head=1,
         n_embd=run_cfg.n_embd,
         window_size=max(16, run_cfg.seq_len // 2),
-        attention_layer_pattern="CSA,HCA",
+        attention_layer_pattern="HCA,HCA,CSA",
         csa_compress_ratio=4,
         hca_compress_ratio=16,
         rope_head_dim=max(8, (run_cfg.n_embd // run_cfg.n_head) // 2),
@@ -339,7 +340,7 @@ def deepseek_attnmhc_config(run_cfg):
         n_kv_head=1,
         n_embd=run_cfg.n_embd,
         window_size=max(16, run_cfg.seq_len // 2),
-        attention_layer_pattern="CSA,HCA",
+        attention_layer_pattern="HCA,HCA,CSA",
         csa_compress_ratio=4,
         hca_compress_ratio=16,
         rope_head_dim=max(8, (run_cfg.n_embd // run_cfg.n_head) // 2),
@@ -369,6 +370,48 @@ def deepseek_attnmhc_config(run_cfg):
 def build_deepseek_attnmhc(run_cfg):
     config = deepseek_attnmhc_config(run_cfg)
     model = DeepSeekV4AttnMhcChat(config, pad_vocab_size_to=64)
+    model.init_weights()
+    return model
+
+
+def deepseek_mhc_config(run_cfg):
+    config = DeepSeekV4MhcConfig(
+        sequence_len=run_cfg.seq_len,
+        vocab_size=VOCAB_SIZE,
+        n_layer=run_cfg.n_layer,
+        n_head=run_cfg.n_head,
+        n_kv_head=1,
+        n_embd=run_cfg.n_embd,
+        window_size=max(16, run_cfg.seq_len // 2),
+        attention_layer_pattern="HCA,HCA,CSA",
+        csa_compress_ratio=4,
+        hca_compress_ratio=16,
+        rope_head_dim=max(8, (run_cfg.n_embd // run_cfg.n_head) // 2),
+        q_lora_rank=max(16, run_cfg.n_embd // 2),
+        o_lora_rank=max(16, run_cfg.n_embd // 2),
+        o_groups=min(run_cfg.n_head, 4),
+        n_routed_experts=run_cfg.deepseek_n_routed_experts,
+        n_shared_experts=1,
+        num_experts_per_tok=run_cfg.deepseek_num_experts_per_tok,
+        moe_intermediate_size=run_cfg.deepseek_moe_intermediate_size or max(64, run_cfg.n_embd),
+        n_hash_layers=-1,
+        n_hash_layers_frac=0.25,
+        routed_scaling_factor=1.0,
+        aux_free_balance_rate=1e-3,
+        sequence_balance_loss_weight=1e-2,
+        hc_mult=2,
+        hc_sinkhorn_iters=8,
+        num_nextn_predict_layers=1,
+        mtp_loss_weight=0.1,
+        original_max_position_embeddings=run_cfg.seq_len,
+        index_topk=run_cfg.deepseek_index_topk,
+    )
+    return config
+
+
+def build_deepseek_mhc(run_cfg):
+    config = deepseek_mhc_config(run_cfg)
+    model = DeepSeekV4MhcChat(config, pad_vocab_size_to=64)
     model.init_weights()
     return model
 
@@ -469,7 +512,7 @@ def evaluate_fixed_starts(model, tokens, starts, batch_size, seq_len, device):
 
 def estimate_active_params(model):
     total = sum(p.numel() for p in model.parameters())
-    if not isinstance(model, (DeepSeekV4NanoChat, DeepSeekV4AttnResChat, DeepSeekV4AttnMhcChat)):
+    if not isinstance(model, (DeepSeekV4NanoChat, DeepSeekV4AttnResChat, DeepSeekV4AttnMhcChat, DeepSeekV4MhcChat)):
         return total
     routed_total = 0
     for block in model.transformer.h:
@@ -510,7 +553,7 @@ def record_metric(rows, seed, config_name, model_name, dataset_name, split, toke
 
 
 def collect_expert_counts(model, seed, config_name, model_name, dataset_name, tokens_trained):
-    if not isinstance(model, (DeepSeekV4NanoChat, DeepSeekV4AttnResChat, DeepSeekV4AttnMhcChat)):
+    if not isinstance(model, (DeepSeekV4NanoChat, DeepSeekV4AttnResChat, DeepSeekV4AttnMhcChat, DeepSeekV4MhcChat)):
         return []
     rows = []
     for layer_idx, block in enumerate(model.transformer.h):
@@ -558,7 +601,7 @@ def train_one(model_name, model, dataset_name, splits, run_cfg, args, seed, devi
     for step in range(1, run_cfg.steps + 1):
         x, y = get_batch(train_batch_tokens, run_cfg.batch_size, run_cfg.seq_len, device, rng, positions)
         optimizer.zero_grad(set_to_none=True)
-        if isinstance(model, (DeepSeekV4NanoChat, DeepSeekV4AttnResChat, DeepSeekV4AttnMhcChat)):
+        if isinstance(model, (DeepSeekV4NanoChat, DeepSeekV4AttnResChat, DeepSeekV4AttnMhcChat, DeepSeekV4MhcChat)):
             loss = model(x, y, include_aux_loss=True)
         else:
             loss = model(x, y)
@@ -566,7 +609,7 @@ def train_one(model_name, model, dataset_name, splits, run_cfg, args, seed, devi
         if run_cfg.grad_clip > 0:
             torch.nn.utils.clip_grad_norm_(model.parameters(), run_cfg.grad_clip)
         optimizer.step()
-        if isinstance(model, (DeepSeekV4NanoChat, DeepSeekV4AttnResChat, DeepSeekV4AttnMhcChat)):
+        if isinstance(model, (DeepSeekV4NanoChat, DeepSeekV4AttnResChat, DeepSeekV4AttnMhcChat, DeepSeekV4MhcChat)):
             model.update_aux_free_balance()
 
         should_eval = (
@@ -1010,6 +1053,18 @@ def build_model_specs(selected_models, run_cfg, args):
             ),
             "builder": lambda: build_deepseek_attnmhc(run_cfg),
         })
+    if "deepseekv4_mhc" in selected_models:
+        specs.append({
+            "name": "deepseekv4_mhc",
+            "fingerprint": (
+                "deepseekv4_mhc",
+                run_cfg.seq_len,
+                run_cfg.n_layer,
+                run_cfg.n_embd,
+                run_cfg.n_head,
+            ),
+            "builder": lambda: build_deepseek_mhc(run_cfg),
+        })
     if not specs:
         raise ValueError("No models selected")
     return specs
@@ -1027,7 +1082,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--datasets", default="tiny_shakespeare,wikitext2", help="comma-separated: tiny_shakespeare,wikitext2")
     parser.add_argument("--config", default="small", choices=sorted(CONFIG_PRESETS), help="benchmark preset")
-    parser.add_argument("--models", default="native,param_matched,deepseekv4,deepseekv4_attnres", help="comma-separated: native,param_matched,deepseekv4,deepseekv4_attnres,deepseekv4_attnmhc")
+    parser.add_argument("--models", default="native,param_matched,deepseekv4,deepseekv4_attnres", help="comma-separated: native,param_matched,deepseekv4,deepseekv4_attnres,deepseekv4_attnmhc,deepseekv4_mhc")
     parser.add_argument("--seeds", type=int, default=1, help="number of seeds to run starting at --seed")
     parser.add_argument("--ablations", default="full", help="DeepSeek variants: full,no_hash,no_shared")
     parser.add_argument("--no-hash-routing", action="store_true", help="disable hash routing for the DeepSeek model")
@@ -1068,7 +1123,7 @@ def main():
     }
     selected_datasets = parse_csv_arg(args.datasets)
     selected_models = parse_csv_arg(args.models)
-    unknown_models = sorted(set(selected_models) - {"native", "param_matched", "deepseekv4", "deepseekv4_attnres", "deepseekv4_attnmhc"})
+    unknown_models = sorted(set(selected_models) - {"native", "param_matched", "deepseekv4", "deepseekv4_attnres", "deepseekv4_attnmhc", "deepseekv4_mhc"})
     if unknown_models:
         raise ValueError(f"Unknown model(s): {unknown_models}")
     model_specs = build_model_specs(selected_models, run_cfg, args)

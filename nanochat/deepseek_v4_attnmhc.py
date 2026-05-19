@@ -55,6 +55,7 @@ from nanochat.deepseek_v4 import (
 @dataclass
 class DeepSeekV4AttnMhcConfig(DeepSeekV4NanoConfig):
     """Extends DeepSeekV4NanoConfig with block AttnRes parameters."""
+    attention_layer_pattern: str = "HCA,HCA,CSA"
     attn_res_block_size: int = 4  # layers per block
 
 

@@ -36,7 +36,7 @@ class DeepSeekV4AttnResConfig:
     n_embd: int = 768
     window_size: int = 256
     compress_ratios: str = "4,16"
-    attention_layer_pattern: str = "CSA,HCA"
+    attention_layer_pattern: str = "HCA,HCA,CSA"
     csa_compress_ratio: int = 4
     hca_compress_ratio: int = 16
     rope_head_dim: int = 0
