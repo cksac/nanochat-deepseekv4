@@ -96,7 +96,7 @@ def _attention_kind(config: DeepSeekV4NanoConfig, layer_idx: int) -> str:
     if not pattern:
         return "CSA"
     kind = pattern[layer_idx % len(pattern)]
-    assert kind in {"CSA", "HCA", "SWA"}, f"Unknown DeepSeek attention kind: {kind}"
+    assert kind in {"CSA", "HCA", "SWA", "DN"}, f"Unknown DeepSeek attention kind: {kind}"
     return kind
 
 

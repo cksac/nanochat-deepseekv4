@@ -24,6 +24,7 @@ import torch.nn.functional as F
 
 from nanochat.common import COMPUTE_DTYPE, print0
 from nanochat.gpt import Linear, norm, apply_rotary_emb
+from nanochat.deltanet import DeltaNetAttention
 
 
 @dataclass
@@ -36,7 +37,7 @@ class DeepSeekV4AttnResConfig:
     n_embd: int = 768
     window_size: int = 256
     compress_ratios: str = "4,16"
-    attention_layer_pattern: str = "HCA,HCA,CSA"
+    attention_layer_pattern: str = "CSA,HCA,DN"
     csa_compress_ratio: int = 4
     hca_compress_ratio: int = 16
     rope_head_dim: int = 0
@@ -96,7 +97,7 @@ def _attention_kind(config: DeepSeekV4AttnResConfig, layer_idx: int) -> str:
     if not pattern:
         return "CSA"
     kind = pattern[layer_idx % len(pattern)]
-    assert kind in {"CSA", "HCA", "SWA"}, f"Unknown DeepSeek attention kind: {kind}"
+    assert kind in {"CSA", "HCA", "SWA", "DN"}, f"Unknown DeepSeek attention kind: {kind}"
     return kind
 
 
@@ -644,7 +645,11 @@ class DeepSeekV4AttnResBlock(nn.Module):
         super().__init__()
         self.layer_idx = layer_idx
         self.block_size = config.attn_res_block_size
-        self.attn = DeepSeekHybridAttention(config, layer_idx)
+        kind = _attention_kind(config, layer_idx)
+        if kind == "DN":
+            self.attn = DeltaNetAttention(n_embd=config.n_embd, n_head=config.n_head)
+        else:
+            self.attn = DeepSeekHybridAttention(config, layer_idx)
         self.moe = DeepSeekMoE(config, layer_idx)
         # Per-layer learned pseudo-query vectors for block attn res
         self.attn_res_proj = nn.Parameter(torch.zeros(config.n_embd))
@@ -738,7 +743,10 @@ class DeepSeekV4AttnResChat(nn.Module):
         for head in self.mtp_heads:
             torch.nn.init.normal_(head.head.weight, mean=0.0, std=0.001)
         for block in self.transformer.h:
-            torch.nn.init.zeros_(block.attn.o_proj.proj_b.weight)
+            if isinstance(block.attn, DeepSeekHybridAttention):
+                torch.nn.init.zeros_(block.attn.o_proj.proj_b.weight)
+            elif isinstance(block.attn, DeltaNetAttention):
+                torch.nn.init.zeros_(block.attn.o_proj.weight)
             # Initialize attn_res projections to small values for stable start
             torch.nn.init.normal_(block.attn_res_proj, mean=0.0, std=0.02)
             torch.nn.init.normal_(block.mlp_res_proj, mean=0.0, std=0.02)

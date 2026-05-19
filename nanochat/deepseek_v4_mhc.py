@@ -22,8 +22,8 @@ from nanochat.deepseek_v4 import (
 
 @dataclass
 class DeepSeekV4MhcConfig(DeepSeekV4NanoConfig):
-    """Same as DeepSeekV4NanoConfig but with HCA,HCA,CSA layer pattern."""
-    attention_layer_pattern: str = "HCA,HCA,CSA"
+    """Same as DeepSeekV4NanoConfig but with CSA,HCA,HCA layer pattern."""
+    attention_layer_pattern: str = "CSA,HCA,HCA"
 
 
 # The model class is identical to DeepSeekV4NanoChat — just uses a different config.

@@ -1,0 +1,7 @@
+seed,config,model,dataset,params,active_params,n_layer,n_embd,n_head,seq_len,steps,batch_size
+42,medium,deepseekv4_attnmhc_dnd,tiny_shakespeare,13439478,6148598,6,256,8,256,1000,8
+43,medium,deepseekv4_attnmhc_dnd,tiny_shakespeare,13439478,6148598,6,256,8,256,1000,8
+44,medium,deepseekv4_attnmhc_dnd,tiny_shakespeare,13439478,6148598,6,256,8,256,1000,8
+42,medium,deepseekv4_attnmhc_dnd,wikitext2,13439478,6148598,6,256,8,256,1000,8
+43,medium,deepseekv4_attnmhc_dnd,wikitext2,13439478,6148598,6,256,8,256,1000,8
+44,medium,deepseekv4_attnmhc_dnd,wikitext2,13439478,6148598,6,256,8,256,1000,8

@@ -1,27 +1,21 @@
 """
-DeepSeek-V4-style nanochat model: mHc + Block Attention Residuals hybrid.
+DeepSeek-V4-style nanochat model: mHc + Block AttnRes + DND layers.
 
-Combines manifold-constrained Hyper-Connections (mHc) from deepseek_v4.py with
-Block AttnRes from deepseek_v4_attnres.py. The mHc handles intra-layer multi-slot
-residual mixing (A_l/B_l/C_l maps), while block AttnRes adds inter-block depth
-aggregation with learned attention over completed block representations.
+Combines:
+- manifold-constrained Hyper-Connections (mHc) for multi-slot residual mixing
+- Block AttnRes for inter-block depth aggregation
+- DND (DeltaNet + Diffusion) attention layers that use previous-layer residuals
+  as conditioning for a diffusion-based future-state predictor
 
-Architecture:
-- Hidden state: [B, T, M, C] (M=hc_mult slots, as in deepseek_v4)
-- Layers use HyperConnectionMixer for A/B/C maps (unchanged)
-- At block boundaries, snapshot the multi-slot state as a block representation
-- Block AttnRes applies learned attention over block reps to produce the
-  initial state for the next block, reducing representational drift
+Layer pattern: CSA,HCA,DND
+- CSA: Conventional Self-Attention with Lightning Indexer
+- HCA: Hybrid Compressed Attention with simple causal masking
+- DND: DeltaNet + Diffusion (linear attention + future-state prediction)
 
-Key differences from deepseek_v4.py:
-- Added: block_attn_res_mhc() for multi-slot block attention
-- Added: attn_res_block_size config parameter
-- Added: per-block learned projections for AttnRes queries + sink logits
-- The head_mix is unchanged — still uses HyperConnectionMixer to reduce to 1 slot
-
-Key differences from deepseek_v4_attnres.py:
-- Keeps full mHc machinery (multi-slot [B,T,M,C] state)
-- AttnRes operates over [B,T,M*C] block snapshots rather than [B,T,C]
+The DND layer collects residuals from previous layers within the same attention
+block (via the mHc multi-slot state snapshots) and uses them to condition a
+lightweight denoiser that predicts N future states. The final output is a
+learned mixture of the DeltaNet output and the predicted future states.
 """
 
 from dataclasses import dataclass
@@ -33,8 +27,8 @@ import torch.nn.functional as F
 
 from nanochat.common import COMPUTE_DTYPE, print0
 from nanochat.gpt import Linear, norm, apply_rotary_emb
+from nanochat.deltanet_diffusion import DeltaNetDiffusionAttention
 
-# Import shared components from deepseek_v4
 from nanochat.deepseek_v4 import (
     DeepSeekV4NanoConfig,
     HyperConnectionMixer,
@@ -43,6 +37,7 @@ from nanochat.deepseek_v4 import (
     DeepSeekHybridAttention,
     DeepSeekMoE,
     GroupedOutputProjection,
+    MTPPredictionHead,
     _num_hash_layers,
     _default_rank,
     _parse_compress_ratios,
@@ -50,119 +45,132 @@ from nanochat.deepseek_v4 import (
     _rope_dim,
     precompute_yarn_rotary,
 )
-from nanochat.deltanet import DeltaNetAttention
+
+
+def _attention_kind_dnd(config, layer_idx: int) -> str:
+    """Extended attention kind parser that accepts 'DND' for DeltaNet+Diffusion."""
+    pattern = [part.strip().upper() for part in config.attention_layer_pattern.split(",") if part.strip()]
+    if not pattern:
+        return "CSA"
+    kind = pattern[layer_idx % len(pattern)]
+    assert kind in {"CSA", "HCA", "SWA", "DN", "DND"}, f"Unknown attention kind: {kind}"
+    return kind
 
 
 @dataclass
-class DeepSeekV4AttnMhcConfig(DeepSeekV4NanoConfig):
-    """Extends DeepSeekV4NanoConfig with block AttnRes parameters."""
-    attention_layer_pattern: str = "CSA,HCA,DN"
-    attn_res_block_size: int = 4  # layers per block
+class DeepSeekV4AttnMhcDndConfig(DeepSeekV4NanoConfig):
+    """mHc + Block AttnRes + DND layers config."""
+    attention_layer_pattern: str = "CSA,HCA,DND"
+    attn_res_block_size: int = 4
+    dnd_n_future: int = 2       # number of future states to predict
+    dnd_max_cond: int = 2       # max previous layers used as conditioning
+    dnd_conv_size: int = 4
 
 
 # ─── Block Attention Residuals for multi-slot state ────────────────────────────
 
 def block_attn_res_mhc(blocks: list[torch.Tensor], current: torch.Tensor,
                        proj_weight: torch.Tensor, sink_logit: torch.Tensor) -> torch.Tensor:
-    """
-    Inter-block attention for multi-slot mHc state.
-
-    blocks: list of N tensors of shape [B, T, M, C] — completed block snapshots
-    current: [B, T, M, C] — current multi-slot state
-    proj_weight: [M*C] — learned pseudo-query vector
-    sink_logit: scalar — "attend to nothing" logit
-    Returns: [B, T, M, C] — blended state
-    """
+    """Inter-block attention for multi-slot mHc state."""
     B, T, M, C = current.shape
-    # Stack all candidates: [N+1, B, T, M*C]
     all_states = [b.flatten(2) for b in blocks] + [current.flatten(2)]
-    V = torch.stack(all_states)  # [N+1, B, T, M*C]
+    V = torch.stack(all_states)
     K = norm(V)
-    # Compute attention logits
-    logits = torch.einsum("d, n b t d -> n b t", proj_weight.to(K.dtype), K)  # [N+1, B, T]
-    # Attention sink
-    sink = sink_logit.expand(1, B, T)  # [1, B, T]
-    logits_with_sink = torch.cat([logits, sink], dim=0)  # [N+2, B, T]
+    logits = torch.einsum("d, n b t d -> n b t", proj_weight.to(K.dtype), K)
+    sink = sink_logit.expand(1, B, T)
+    logits_with_sink = torch.cat([logits, sink], dim=0)
     weights = logits_with_sink.float().softmax(0).to(V.dtype)
-    # Weighted sum over block values only (discard sink weight)
     h = torch.einsum("n b t, n b t d -> b t d", weights[:V.shape[0]], V)
     return h.view(B, T, M, C)
 
 
-# ─── Transformer Block: mHc + Block AttnRes ───────────────────────────────────
+# ─── DND Block ────────────────────────────────────────────────────────────────
 
-class DeepSeekV4AttnMhcBlock(nn.Module):
+class DeepSeekV4AttnMhcDndBlock(nn.Module):
     """
-    Transformer block combining mHc and Block AttnRes.
+    Transformer block combining mHc, Block AttnRes, and DND attention.
 
-    - mHc (HyperConnectionMixer) handles per-layer residual mixing in multi-slot space
-    - Block AttnRes adds inter-block depth aggregation at block boundaries
+    For DND layers, the block passes residuals from previous layers within
+    the same attention block to condition the diffusion future-state predictor.
     """
 
-    def __init__(self, config: DeepSeekV4AttnMhcConfig, layer_idx: int):
+    def __init__(self, config: DeepSeekV4AttnMhcDndConfig, layer_idx: int):
         super().__init__()
         self.layer_idx = layer_idx
         self.block_size = config.attn_res_block_size
         self.attn_mix = HyperConnectionMixer(config)
         self.ffn_mix = HyperConnectionMixer(config)
-        kind = _attention_kind(config, layer_idx)
-        if kind == "DN":
-            self.attn = DeltaNetAttention(n_embd=config.n_embd, n_head=config.n_head)
+
+        kind = _attention_kind_dnd(config, layer_idx)
+        self.kind = kind
+        if kind == "DND":
+            self.attn = DeltaNetDiffusionAttention(
+                n_embd=config.n_embd,
+                n_head=config.n_head,
+                n_future=config.dnd_n_future,
+                max_cond_layers=config.dnd_max_cond,
+                conv_size=config.dnd_conv_size,
+            )
         else:
             self.attn = DeepSeekHybridAttention(config, layer_idx)
+
         self.moe = DeepSeekMoE(config, layer_idx)
-        # Block AttnRes projections (operate on flattened M*C dim)
+        # Block AttnRes projections
         mc_dim = config.hc_mult * config.n_embd
         self.attn_res_proj = nn.Parameter(torch.zeros(mc_dim))
         self.attn_res_sink = nn.Parameter(torch.zeros(()))
 
     def _is_block_boundary(self):
-        """Whether this layer starts a new block."""
         return self.layer_idx > 0 and self.layer_idx % self.block_size == 0
 
-    def forward(self, blocks: list[torch.Tensor], x: torch.Tensor, input_ids, cos_sin):
-        # x: [B, T, M, C]
-        # At block boundary: snapshot state and blend via AttnRes
+    def forward(self, blocks: list[torch.Tensor], x: torch.Tensor,
+                layer_residuals: list[torch.Tensor], input_ids, cos_sin):
+        """
+        Args:
+            blocks: list of completed block snapshots [B, T, M, C]
+            x: current multi-slot state [B, T, M, C]
+            layer_residuals: list of [B, T, C] from previous layers in current block
+            input_ids: token ids for MoE routing
+            cos_sin: rotary embeddings
+
+        Returns:
+            blocks, x, layer_residuals (updated)
+        """
         if self._is_block_boundary():
             blocks = blocks + [x]
-            # Apply block AttnRes to produce blended starting state for new block
             x = block_attn_res_mhc(blocks, x, self.attn_res_proj, self.attn_res_sink)
+            layer_residuals = []  # reset for new block
 
-        # Standard mHc attention path
+        # mHc attention path
         residual = x
         y, post, comb = self.attn_mix(x)
-        y = self.attn(norm(y), cos_sin)
-        x = hyper_post(y, residual, post, comb)
+        normed_y = norm(y)
 
-        # Standard mHc FFN path
+        if self.kind == "DND":
+            # Pass residuals for diffusion conditioning
+            attn_out = self.attn(normed_y, cos_sin, residuals=layer_residuals)
+        else:
+            attn_out = self.attn(normed_y, cos_sin)
+
+        x = hyper_post(attn_out, residual, post, comb)
+
+        # Collect this layer's output as residual for future DND layers
+        # Use the reduced single-slot representation for efficiency
+        layer_residuals = layer_residuals + [normed_y.detach()]
+
+        # mHc FFN path
         residual = x
         y, post, comb = self.ffn_mix(x)
         y = self.moe(norm(y), input_ids)
         x = hyper_post(y, residual, post, comb)
 
-        return blocks, x
-
-
-# ─── Multi-Token Prediction ───────────────────────────────────────────────────
-
-class MTPPredictionHead(nn.Module):
-    """Multi-token prediction head."""
-
-    def __init__(self, config: DeepSeekV4AttnMhcConfig, padded_vocab_size: int):
-        super().__init__()
-        self.e_proj = Linear(config.n_embd, config.n_embd, bias=False)
-        self.h_proj = Linear(config.n_embd, config.n_embd, bias=False)
-        self.head = Linear(config.n_embd, padded_vocab_size, bias=False)
-
-    def forward(self, hidden, token_embed):
-        x = self.e_proj(norm(token_embed)) + self.h_proj(norm(hidden))
-        return self.head(norm(x))
+        return blocks, x, layer_residuals
 
 
 # ─── Top-Level Model ──────────────────────────────────────────────────────────
 
-class DeepSeekV4AttnMhcChat(nn.Module):
-    def __init__(self, config: DeepSeekV4AttnMhcConfig, pad_vocab_size_to=64):
+class DeepSeekV4AttnMhcDndChat(nn.Module):
+    def __init__(self, config: DeepSeekV4AttnMhcDndConfig, pad_vocab_size_to=64):
         super().__init__()
         self.config = config
         padded_vocab_size = ((config.vocab_size + pad_vocab_size_to - 1) // pad_vocab_size_to) * pad_vocab_size_to
@@ -171,7 +179,7 @@ class DeepSeekV4AttnMhcChat(nn.Module):
         self.padded_vocab_size = padded_vocab_size
         self.transformer = nn.ModuleDict({
             "wte": nn.Embedding(padded_vocab_size, config.n_embd),
-            "h": nn.ModuleList([DeepSeekV4AttnMhcBlock(config, i) for i in range(config.n_layer)]),
+            "h": nn.ModuleList([DeepSeekV4AttnMhcDndBlock(config, i) for i in range(config.n_layer)]),
         })
         self.head_mix = HyperConnectionMixer(config)
         self.lm_head = Linear(config.n_embd, padded_vocab_size, bias=False)
@@ -203,9 +211,8 @@ class DeepSeekV4AttnMhcChat(nn.Module):
         for block in self.transformer.h:
             if isinstance(block.attn, DeepSeekHybridAttention):
                 torch.nn.init.zeros_(block.attn.o_proj.proj_b.weight)
-            elif isinstance(block.attn, DeltaNetAttention):
+            elif isinstance(block.attn, DeltaNetDiffusionAttention):
                 torch.nn.init.zeros_(block.attn.o_proj.weight)
-            # Initialize attn_res projections small for stable start
             torch.nn.init.normal_(block.attn_res_proj, mean=0.0, std=0.02)
 
         cos, sin = precompute_yarn_rotary(self.rotary_seq_len, _rope_dim(self.config), self.config, device=self.transformer.wte.weight.device)
@@ -222,16 +229,14 @@ class DeepSeekV4AttnMhcChat(nn.Module):
         cos_sin = self.cos[:, :T], self.sin[:, :T]
 
         x = self.transformer.wte(idx).to(COMPUTE_DTYPE)
-        # Initialize multi-slot state [B, T, M, C] with normalized embedding
         x = norm(x).unsqueeze(2).repeat(1, 1, self.config.hc_mult, 1)
 
-        # Initialize block list with initial state
         blocks = [x]
+        layer_residuals = []
 
         for block in self.transformer.h:
-            blocks, x = block(blocks, x, idx, cos_sin)
+            blocks, x, layer_residuals = block(blocks, x, layer_residuals, idx, cos_sin)
 
-        # Reduce multi-slot to single via head_mix
         y, _, _ = self.head_mix(x)
         return norm(y)
 
@@ -308,7 +313,7 @@ class DeepSeekV4AttnMhcChat(nn.Module):
         return {
             "wte": wte,
             "lm_head": lm_head,
-            "transformer_matrices": transformer_matrices,
+            "transformer_h": transformer_matrices,
             "mtp": mtp,
             "total": total,
         }
