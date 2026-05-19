@@ -9,7 +9,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 
-MODEL_ORDER = ["native", "param_matched", "deepseekv4", "deepseekv4_mhc", "deepseekv4_attnres", "deepseekv4_attnmhc", "deepseekv4_dn", "deepseekv4_attnmhc_dnd"]
+MODEL_ORDER = ["native", "param_matched", "deepseekv4", "deepseekv4_mhc", "deepseekv4_attnres", "deepseekv4_attnmhc", "deepseekv4_attnmhc_ch", "deepseekv4_attnmhc_2h", "deepseekv4_attnmhc_swa", "deepseekv4_attnmhc_hca", "deepseekv4_dn", "deepseekv4_attnmhc_dnd"]
 MODEL_LABELS = {
     "native": "native",
     "param_matched": "param-matched",
@@ -17,6 +17,10 @@ MODEL_LABELS = {
     "deepseekv4_mhc": "deepseekv4 (mHc C+2H)",
     "deepseekv4_attnres": "deepseekv4 (AttnRes C+H+DN)",
     "deepseekv4_attnmhc": "deepseekv4 (AttnMhc C+H+DN)",
+    "deepseekv4_attnmhc_ch": "deepseekv4 (AttnMhc C+H)",
+    "deepseekv4_attnmhc_2h": "deepseekv4 (AttnMhc C+2H)",
+    "deepseekv4_attnmhc_swa": "deepseekv4 (AttnMhc 2SWA+C+H+DN)",
+    "deepseekv4_attnmhc_hca": "deepseekv4 (AttnMhc 2HCA+C+H+DN)",
     "deepseekv4_dn": "deepseekv4 (mHc C+H+DN)",
     "deepseekv4_attnmhc_dnd": "deepseekv4 (AttnMhc C+H+DND)",
     "deepseekv4_no_hash": "no hash",
@@ -33,6 +37,10 @@ COLORS = {
     "deepseekv4_mhc": "#e67e22",
     "deepseekv4_attnres": "#2e7d32",
     "deepseekv4_attnmhc": "#1565c0",
+    "deepseekv4_attnmhc_ch": "#42a5f5",
+    "deepseekv4_attnmhc_2h": "#f57c00",
+    "deepseekv4_attnmhc_swa": "#d81b60",
+    "deepseekv4_attnmhc_hca": "#5e35b1",
     "deepseekv4_dn": "#8e24aa",
     "deepseekv4_attnmhc_dnd": "#00897b",
     "deepseekv4_no_hash": "#e09a8a",

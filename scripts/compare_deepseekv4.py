@@ -376,6 +376,181 @@ def build_deepseek_attnmhc(run_cfg):
     return model
 
 
+def deepseek_attnmhc_ch_config(run_cfg):
+    """AttnMhc with simple CSA,HCA cycle (no DN, no extra HCA)."""
+    config = DeepSeekV4AttnMhcConfig(
+        sequence_len=run_cfg.seq_len,
+        vocab_size=VOCAB_SIZE,
+        n_layer=run_cfg.n_layer,
+        n_head=run_cfg.n_head,
+        n_kv_head=1,
+        n_embd=run_cfg.n_embd,
+        window_size=max(16, run_cfg.seq_len // 2),
+        attention_layer_pattern="CSA,HCA",
+        csa_compress_ratio=4,
+        hca_compress_ratio=16,
+        rope_head_dim=max(8, (run_cfg.n_embd // run_cfg.n_head) // 2),
+        q_lora_rank=max(16, run_cfg.n_embd // 2),
+        o_lora_rank=max(16, run_cfg.n_embd // 2),
+        o_groups=min(run_cfg.n_head, 4),
+        n_routed_experts=run_cfg.deepseek_n_routed_experts,
+        n_shared_experts=1,
+        num_experts_per_tok=run_cfg.deepseek_num_experts_per_tok,
+        moe_intermediate_size=run_cfg.deepseek_moe_intermediate_size or max(64, run_cfg.n_embd),
+        n_hash_layers=-1,
+        n_hash_layers_frac=0.25,
+        routed_scaling_factor=1.0,
+        aux_free_balance_rate=1e-3,
+        sequence_balance_loss_weight=1e-2,
+        hc_mult=2,
+        hc_sinkhorn_iters=8,
+        attn_res_block_size=max(1, run_cfg.n_layer // 3),
+        num_nextn_predict_layers=1,
+        mtp_loss_weight=0.1,
+        original_max_position_embeddings=run_cfg.seq_len,
+        index_topk=run_cfg.deepseek_index_topk,
+    )
+    return config
+
+
+def build_deepseek_attnmhc_ch(run_cfg):
+    config = deepseek_attnmhc_ch_config(run_cfg)
+    model = DeepSeekV4AttnMhcChat(config, pad_vocab_size_to=64)
+    model.init_weights()
+    return model
+
+
+def deepseek_attnmhc_2h_config(run_cfg):
+    config = DeepSeekV4AttnMhcConfig(
+        sequence_len=run_cfg.seq_len,
+        vocab_size=VOCAB_SIZE,
+        n_layer=run_cfg.n_layer,
+        n_head=run_cfg.n_head,
+        n_kv_head=1,
+        n_embd=run_cfg.n_embd,
+        window_size=max(16, run_cfg.seq_len // 2),
+        attention_layer_pattern="CSA,HCA,HCA",
+        csa_compress_ratio=4,
+        hca_compress_ratio=16,
+        rope_head_dim=max(8, (run_cfg.n_embd // run_cfg.n_head) // 2),
+        q_lora_rank=max(16, run_cfg.n_embd // 2),
+        o_lora_rank=max(16, run_cfg.n_embd // 2),
+        o_groups=min(run_cfg.n_head, 4),
+        n_routed_experts=run_cfg.deepseek_n_routed_experts,
+        n_shared_experts=1,
+        num_experts_per_tok=run_cfg.deepseek_num_experts_per_tok,
+        moe_intermediate_size=run_cfg.deepseek_moe_intermediate_size or max(64, run_cfg.n_embd),
+        n_hash_layers=-1,
+        n_hash_layers_frac=0.25,
+        routed_scaling_factor=1.0,
+        aux_free_balance_rate=1e-3,
+        sequence_balance_loss_weight=1e-2,
+        hc_mult=2,
+        hc_sinkhorn_iters=8,
+        attn_res_block_size=max(1, run_cfg.n_layer // 3),
+        num_nextn_predict_layers=1,
+        mtp_loss_weight=0.1,
+        original_max_position_embeddings=run_cfg.seq_len,
+        index_topk=run_cfg.deepseek_index_topk,
+    )
+    return config
+
+
+def build_deepseek_attnmhc_2h(run_cfg):
+    config = deepseek_attnmhc_2h_config(run_cfg)
+    model = DeepSeekV4AttnMhcChat(config, pad_vocab_size_to=64)
+    model.init_weights()
+    return model
+
+
+def deepseek_attnmhc_swa_config(run_cfg):
+    """Flash-style: first 2 layers SWA, then cycle CSA,HCA,DN."""
+    config = DeepSeekV4AttnMhcConfig(
+        sequence_len=run_cfg.seq_len,
+        vocab_size=VOCAB_SIZE,
+        n_layer=run_cfg.n_layer,
+        n_head=run_cfg.n_head,
+        n_kv_head=1,
+        n_embd=run_cfg.n_embd,
+        window_size=max(16, run_cfg.seq_len // 2),
+        attention_layer_pattern="SWA,SWA+CSA,HCA,DN",
+        csa_compress_ratio=4,
+        hca_compress_ratio=16,
+        rope_head_dim=max(8, (run_cfg.n_embd // run_cfg.n_head) // 2),
+        q_lora_rank=max(16, run_cfg.n_embd // 2),
+        o_lora_rank=max(16, run_cfg.n_embd // 2),
+        o_groups=min(run_cfg.n_head, 4),
+        n_routed_experts=run_cfg.deepseek_n_routed_experts,
+        n_shared_experts=1,
+        num_experts_per_tok=run_cfg.deepseek_num_experts_per_tok,
+        moe_intermediate_size=run_cfg.deepseek_moe_intermediate_size or max(64, run_cfg.n_embd),
+        n_hash_layers=-1,
+        n_hash_layers_frac=0.25,
+        routed_scaling_factor=1.0,
+        aux_free_balance_rate=1e-3,
+        sequence_balance_loss_weight=1e-2,
+        hc_mult=2,
+        hc_sinkhorn_iters=8,
+        attn_res_block_size=max(1, run_cfg.n_layer // 3),
+        num_nextn_predict_layers=1,
+        mtp_loss_weight=0.1,
+        original_max_position_embeddings=run_cfg.seq_len,
+        index_topk=run_cfg.deepseek_index_topk,
+    )
+    return config
+
+
+def build_deepseek_attnmhc_swa(run_cfg):
+    config = deepseek_attnmhc_swa_config(run_cfg)
+    model = DeepSeekV4AttnMhcChat(config, pad_vocab_size_to=64)
+    model.init_weights()
+    return model
+
+
+def deepseek_attnmhc_hca_config(run_cfg):
+    """Pro-style: first 2 layers HCA, then cycle CSA,HCA,DN."""
+    config = DeepSeekV4AttnMhcConfig(
+        sequence_len=run_cfg.seq_len,
+        vocab_size=VOCAB_SIZE,
+        n_layer=run_cfg.n_layer,
+        n_head=run_cfg.n_head,
+        n_kv_head=1,
+        n_embd=run_cfg.n_embd,
+        window_size=max(16, run_cfg.seq_len // 2),
+        attention_layer_pattern="HCA,HCA+CSA,HCA,DN",
+        csa_compress_ratio=4,
+        hca_compress_ratio=16,
+        rope_head_dim=max(8, (run_cfg.n_embd // run_cfg.n_head) // 2),
+        q_lora_rank=max(16, run_cfg.n_embd // 2),
+        o_lora_rank=max(16, run_cfg.n_embd // 2),
+        o_groups=min(run_cfg.n_head, 4),
+        n_routed_experts=run_cfg.deepseek_n_routed_experts,
+        n_shared_experts=1,
+        num_experts_per_tok=run_cfg.deepseek_num_experts_per_tok,
+        moe_intermediate_size=run_cfg.deepseek_moe_intermediate_size or max(64, run_cfg.n_embd),
+        n_hash_layers=-1,
+        n_hash_layers_frac=0.25,
+        routed_scaling_factor=1.0,
+        aux_free_balance_rate=1e-3,
+        sequence_balance_loss_weight=1e-2,
+        hc_mult=2,
+        hc_sinkhorn_iters=8,
+        attn_res_block_size=max(1, run_cfg.n_layer // 3),
+        num_nextn_predict_layers=1,
+        mtp_loss_weight=0.1,
+        original_max_position_embeddings=run_cfg.seq_len,
+        index_topk=run_cfg.deepseek_index_topk,
+    )
+    return config
+
+
+def build_deepseek_attnmhc_hca(run_cfg):
+    config = deepseek_attnmhc_hca_config(run_cfg)
+    model = DeepSeekV4AttnMhcChat(config, pad_vocab_size_to=64)
+    model.init_weights()
+    return model
+
+
 def deepseek_mhc_config(run_cfg):
     config = DeepSeekV4MhcConfig(
         sequence_len=run_cfg.seq_len,
@@ -1142,6 +1317,54 @@ def build_model_specs(selected_models, run_cfg, args):
             ),
             "builder": lambda: build_deepseek_attnmhc(run_cfg),
         })
+    if "deepseekv4_attnmhc_ch" in selected_models:
+        specs.append({
+            "name": "deepseekv4_attnmhc_ch",
+            "fingerprint": (
+                "deepseekv4_attnmhc_ch",
+                run_cfg.seq_len,
+                run_cfg.n_layer,
+                run_cfg.n_embd,
+                run_cfg.n_head,
+            ),
+            "builder": lambda: build_deepseek_attnmhc_ch(run_cfg),
+        })
+    if "deepseekv4_attnmhc_2h" in selected_models:
+        specs.append({
+            "name": "deepseekv4_attnmhc_2h",
+            "fingerprint": (
+                "deepseekv4_attnmhc_2h",
+                run_cfg.seq_len,
+                run_cfg.n_layer,
+                run_cfg.n_embd,
+                run_cfg.n_head,
+            ),
+            "builder": lambda: build_deepseek_attnmhc_2h(run_cfg),
+        })
+    if "deepseekv4_attnmhc_swa" in selected_models:
+        specs.append({
+            "name": "deepseekv4_attnmhc_swa",
+            "fingerprint": (
+                "deepseekv4_attnmhc_swa",
+                run_cfg.seq_len,
+                run_cfg.n_layer,
+                run_cfg.n_embd,
+                run_cfg.n_head,
+            ),
+            "builder": lambda: build_deepseek_attnmhc_swa(run_cfg),
+        })
+    if "deepseekv4_attnmhc_hca" in selected_models:
+        specs.append({
+            "name": "deepseekv4_attnmhc_hca",
+            "fingerprint": (
+                "deepseekv4_attnmhc_hca",
+                run_cfg.seq_len,
+                run_cfg.n_layer,
+                run_cfg.n_embd,
+                run_cfg.n_head,
+            ),
+            "builder": lambda: build_deepseek_attnmhc_hca(run_cfg),
+        })
     if "deepseekv4_mhc" in selected_models:
         specs.append({
             "name": "deepseekv4_mhc",
@@ -1236,7 +1459,7 @@ def main():
     }
     selected_datasets = parse_csv_arg(args.datasets)
     selected_models = parse_csv_arg(args.models)
-    unknown_models = sorted(set(selected_models) - {"native", "param_matched", "deepseekv4", "deepseekv4_attnres", "deepseekv4_attnmhc", "deepseekv4_mhc", "deepseekv4_dn", "deepseekv4_attnmhc_dnd"})
+    unknown_models = sorted(set(selected_models) - {"native", "param_matched", "deepseekv4", "deepseekv4_attnres", "deepseekv4_attnmhc", "deepseekv4_attnmhc_ch", "deepseekv4_attnmhc_2h", "deepseekv4_attnmhc_swa", "deepseekv4_attnmhc_hca", "deepseekv4_mhc", "deepseekv4_dn", "deepseekv4_attnmhc_dnd"})
     if unknown_models:
         raise ValueError(f"Unknown model(s): {unknown_models}")
     model_specs = build_model_specs(selected_models, run_cfg, args)

@@ -92,10 +92,27 @@ def _parse_compress_ratios(config: DeepSeekV4NanoConfig) -> list[int]:
 
 
 def _attention_kind(config: DeepSeekV4NanoConfig, layer_idx: int) -> str:
-    pattern = [part.strip().upper() for part in config.attention_layer_pattern.split(",") if part.strip()]
-    if not pattern:
-        return "CSA"
-    kind = pattern[layer_idx % len(pattern)]
+    """Parse attention layer pattern with optional prefix layers.
+
+    Supports two formats:
+      - Simple cycle: "CSA,HCA,DN" — repeating pattern from layer 0
+      - Prefix + cycle: "SWA,SWA+CSA,HCA,DN" — first N layers fixed, then cycle
+        The '+' separates prefix layers (left) from the repeating pattern (right).
+    """
+    raw = config.attention_layer_pattern
+    if "+" in raw:
+        prefix_str, cycle_str = raw.split("+", 1)
+        prefix = [p.strip().upper() for p in prefix_str.split(",") if p.strip()]
+        cycle = [p.strip().upper() for p in cycle_str.split(",") if p.strip()]
+        if layer_idx < len(prefix):
+            kind = prefix[layer_idx]
+        else:
+            kind = cycle[(layer_idx - len(prefix)) % len(cycle)] if cycle else "CSA"
+    else:
+        pattern = [part.strip().upper() for part in raw.split(",") if part.strip()]
+        if not pattern:
+            return "CSA"
+        kind = pattern[layer_idx % len(pattern)]
     assert kind in {"CSA", "HCA", "SWA", "DN"}, f"Unknown DeepSeek attention kind: {kind}"
     return kind
 

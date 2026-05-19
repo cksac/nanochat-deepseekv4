@@ -49,10 +49,20 @@ from nanochat.deepseek_v4 import (
 
 def _attention_kind_dnd(config, layer_idx: int) -> str:
     """Extended attention kind parser that accepts 'DND' for DeltaNet+Diffusion."""
-    pattern = [part.strip().upper() for part in config.attention_layer_pattern.split(",") if part.strip()]
-    if not pattern:
-        return "CSA"
-    kind = pattern[layer_idx % len(pattern)]
+    raw = config.attention_layer_pattern
+    if "+" in raw:
+        prefix_str, cycle_str = raw.split("+", 1)
+        prefix = [p.strip().upper() for p in prefix_str.split(",") if p.strip()]
+        cycle = [p.strip().upper() for p in cycle_str.split(",") if p.strip()]
+        if layer_idx < len(prefix):
+            kind = prefix[layer_idx]
+        else:
+            kind = cycle[(layer_idx - len(prefix)) % len(cycle)] if cycle else "CSA"
+    else:
+        pattern = [part.strip().upper() for part in raw.split(",") if part.strip()]
+        if not pattern:
+            return "CSA"
+        kind = pattern[layer_idx % len(pattern)]
     assert kind in {"CSA", "HCA", "SWA", "DN", "DND"}, f"Unknown attention kind: {kind}"
     return kind
 
