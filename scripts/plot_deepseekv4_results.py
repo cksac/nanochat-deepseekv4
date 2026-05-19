@@ -9,11 +9,12 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 
-MODEL_ORDER = ["native", "param_matched", "deepseekv4"]
+MODEL_ORDER = ["native", "param_matched", "deepseekv4", "deepseekv4_attnres"]
 MODEL_LABELS = {
     "native": "native",
     "param_matched": "param-matched",
-    "deepseekv4": "deepseekv4",
+    "deepseekv4": "deepseekv4 (mHc)",
+    "deepseekv4_attnres": "deepseekv4 (AttnRes)",
     "deepseekv4_no_hash": "no hash",
     "deepseekv4_no_shared": "no shared",
 }
@@ -25,6 +26,7 @@ COLORS = {
     "native": "#6b7280",
     "param_matched": "#b5bac3",
     "deepseekv4": "#c84a35",
+    "deepseekv4_attnres": "#2e7d32",
     "deepseekv4_no_hash": "#e09a8a",
     "deepseekv4_no_shared": "#8f2e21",
 }
@@ -100,9 +102,10 @@ def draw_grouped_metric_bars(summary_rows, metric, ylabel, title, output_path):
     configs = config_order(summary_rows)
     cells = metric_cells(summary_rows)
     lookup = summary_lookup(summary_rows, metric)
-    fig, axes = plt.subplots(len(configs), 1, figsize=(12, 3.8 * len(configs)), squeeze=False)
-    width = 0.22
+    fig, axes = plt.subplots(len(configs), 1, figsize=(13, 3.8 * len(configs)), squeeze=False)
+    width = 0.18
     x = np.arange(len(cells))
+    n_models = len(MODEL_ORDER)
 
     for row_idx, config_name in enumerate(configs):
         ax = axes[row_idx, 0]
@@ -118,7 +121,7 @@ def draw_grouped_metric_bars(summary_rows, metric, ylabel, title, output_path):
                 mean + std for mean, std in zip(means, stds)
                 if np.isfinite(mean)
             ])
-            xpos = x + (model_idx - 1) * width
+            xpos = x + (model_idx - (n_models - 1) / 2) * width
             bars = ax.bar(
                 xpos,
                 means,
